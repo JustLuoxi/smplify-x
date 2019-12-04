@@ -242,6 +242,7 @@ def main(**args):
 
             out_img_fn = osp.join(curr_img_folder, 'output.png')
 
+
             fit_single_frame(img, keypoints[[person_id]],
                              body_model=body_model,
                              camera=camera,

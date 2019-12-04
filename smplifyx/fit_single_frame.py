@@ -195,6 +195,18 @@ def fit_single_frame(img,
     else:
         body_mean_pose = body_pose_prior.get_mean().detach().cpu()
 
+    # # test exporting
+    # body_model.reset_params(body_pose=body_mean_pose)
+    # model_output = body_model(return_verts=True)
+    # vertices = model_output.vertices.detach().cpu().numpy().squeeze()
+    # import trimesh
+    # import numpy as np
+    # out_mesh = trimesh.Trimesh(vertices, body_model.faces, process=False)
+    # rot = trimesh.transformations.rotation_matrix(
+    #     np.radians(180), [1, 0, 0])
+    # out_mesh.apply_transform(rot)
+    # out_mesh.export('test.obj')
+
     keypoint_data = torch.tensor(keypoints, dtype=dtype)
     gt_joints = keypoint_data[:, :, :2]
     if use_joints_conf:
