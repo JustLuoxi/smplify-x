@@ -25,6 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from transform.rotation import Rotation as R
 
 def to_tensor(tensor, dtype=torch.float32):
     if torch.Tensor == type(tensor):
@@ -181,3 +182,119 @@ def smpl_to_openpose(model_type='smplx', use_hands=True, use_face=True,
             raise ValueError('Unknown model type: {}'.format(model_type))
     else:
         raise ValueError('Unknown joint format: {}'.format(openpose_format))
+
+
+# ---- Just for 3d joints fitting ---
+def ComputeGlobalR(target_skeleton_batch, mano_skeleton_batch, isBody=False):
+    batch_size = target_skeleton_batch.shape[0]
+    global_rot = np.zeros([batch_size, 3])
+
+    for i in range(batch_size):
+        mano_skeleton = mano_skeleton_batch[i,:,:]
+        target_skeleton = target_skeleton_batch[i,:,:]
+        # palm and index
+        if isBody:
+            smpl_spine = normalizev(mano_skeleton[1] - mano_skeleton[8])
+            smpl_shoulder = normalizev(mano_skeleton[2] - mano_skeleton[5])
+            smpl_facing = normalizev(np.cross(smpl_spine, smpl_shoulder))
+
+            target_spine = normalizev(target_skeleton[1] - target_skeleton[8])
+            target_shoulder = normalizev(target_skeleton[2] - target_skeleton[5])
+            target_facing = normalizev(np.cross(target_spine, target_shoulder))
+
+            # compute spine rot from mano to target
+            axis = normalizev(np.cross(smpl_spine, target_spine))
+            angle = np.arccos(np.dot(smpl_spine, target_spine))
+            rot1 = R.from_rotvec(axis * angle)
+
+            smpl_facing_rot1 = R.apply(rot1, smpl_facing)
+            axis2 = normalizev(np.cross(smpl_facing_rot1, target_facing))
+            angle2 = np.arccos(np.dot(smpl_facing_rot1, target_facing))
+            rot2 = R.from_rotvec(axis2 * angle2)
+            est_rot = rot2 * rot1
+
+            # fix 180
+            rot_mat = est_rot.as_dcm()
+            trans_smpl_spine = np.matmul(rot_mat, smpl_spine)
+            trans_smpl_shoulder = np.matmul(rot_mat, smpl_shoulder)
+            trans_smpl_facing = np.matmul(rot_mat, smpl_facing)
+
+            angle_facing = np.dot(trans_smpl_facing, target_facing)
+            angle_spine = np.dot(trans_smpl_spine, target_spine)
+            angle_shoulder = np.dot(trans_smpl_shoulder, target_shoulder)
+
+            # rotate index again
+            if angle_facing < 0:
+                rot3 = R.from_rotvec(axis2*3.1415)
+                est_rot = rot3*est_rot
+                rot_mat = est_rot.as_dcm()
+                trans_smpl_facing = np.matmul(rot_mat, smpl_facing)
+                angle_facing = np.dot(trans_smpl_facing, target_facing)
+
+            global_rot[i, :] = est_rot.as_rotvec()
+
+        else:
+            # right hand axis
+            mano_index = mano_skeleton[9] - mano_skeleton[0]
+            mano_pinky = mano_skeleton[17] - mano_skeleton[0]
+            mano_palm = np.cross(mano_index, mano_pinky)
+            mano_index = normalizev(mano_index)
+            mano_palm = normalizev(mano_palm)
+            mano_cross = normalizev(np.cross(mano_palm, mano_index))
+            mano_indexfix = normalizev(np.cross(mano_palm, mano_cross))
+
+            targ_index = target_skeleton[9] - target_skeleton[0]
+            targ_pinky = target_skeleton[17] - target_skeleton[0]
+            targ_palm = np.cross(targ_index, targ_pinky)
+            targ_index = normalizev(targ_index)
+            targ_palm = normalizev(targ_palm)
+            targ_cross = normalizev(np.cross(targ_palm, targ_index))
+
+            # compute palm rot from mano to target
+            axis = normalizev(np.cross(mano_palm, targ_palm))
+            angle = np.arccos(np.dot(mano_palm, targ_palm))
+            rot1 = R.from_rotvec(axis * angle)
+
+            mano_indexfix = R.apply(rot1, mano_indexfix)
+            axis2 = normalizev(np.cross(mano_indexfix, targ_index))
+            angle2 = np.arccos(np.dot(mano_indexfix, targ_index))
+            angle2 = angle2
+            rot2 = R.from_rotvec(axis2*angle2)
+            est_rot = rot2*rot1
+            global_rot[i, :] = est_rot.as_rotvec()
+
+            #
+            rot_mat = est_rot.as_dcm()
+            trans_mano_index = np.matmul(rot_mat, mano_index)
+            trans_mano_palm = np.matmul(rot_mat, mano_palm)
+            trans_mano_cross = np.matmul(rot_mat, mano_cross)
+
+            angle_index = np.dot(trans_mano_index, targ_index)
+            angle_palm = np.dot(trans_mano_palm, targ_palm)
+            angle_cross = np.dot(trans_mano_cross, targ_cross)
+
+            # rotate index again
+            if angle_index < 0:
+                rot3 = R.from_rotvec(axis2*3.1415)
+                est_rot = rot3*est_rot
+                rot_mat = est_rot.as_dcm()
+                trans_mano_index = np.matmul(rot_mat, mano_index)
+                angle_index = np.dot(trans_mano_index, targ_index)
+
+            global_rot[i, :] = est_rot.as_rotvec()
+
+    return global_rot
+
+def normalizev(vec):
+    if isinstance(vec, np.ndarray):
+        return vec/np.linalg.norm(vec)
+    else:
+        return vec/torch.norm(vec)
+
+def LoadBodySkeleton(openpose_folder):
+    body_joints_path = openpose_folder + 'skeleton_body\\skeleton.txt'
+    skeleton_body = np.loadtxt(body_joints_path)
+    skeleton_all = skeleton_body.copy()
+    skeleton_all = torch.from_numpy(skeleton_all).type(torch.float32)
+    bodysize = torch.max(torch.cdist(skeleton_all, skeleton_all)) * 0.3
+    return skeleton_all, bodysize

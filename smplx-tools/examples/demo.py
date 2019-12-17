@@ -41,6 +41,14 @@ def main(model_folder, model_type='smplx', ext='npz',
     vertices = output.vertices.detach().cpu().numpy().squeeze()
     joints = output.joints.detach().cpu().numpy().squeeze()
 
+    import trimesh
+    import numpy as np
+    out_mesh = trimesh.Trimesh(vertices, model.faces, process=False)
+    rot = trimesh.transformations.rotation_matrix(
+        np.radians(180), [1, 0, 0])
+    out_mesh.apply_transform(rot)
+    out_mesh.export('test.obj')
+
     print('Vertices shape =', vertices.shape)
     print('Joints shape =', joints.shape)
 

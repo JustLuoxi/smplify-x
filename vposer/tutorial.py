@@ -4,7 +4,7 @@
 # %matplotlib inline
 
 expr_dir = './vposer_v1_0' #'TRAINED_MODEL_DIRECTORY'  in this directory the trained model along with the model code exist
-bm_path =  '../smplx/SMPLX_FEMALE.npz'#'PATH_TO_SMPLX_model.npz'  obtain from https://smpl-x.is.tue.mpg.de/downloads
+bm_path =  '../smplx/SMPLX_MALE.npz'#'PATH_TO_SMPLX_model.npz'  obtain from https://smpl-x.is.tue.mpg.de/downloads
 
 
 from human_body_prior.body_model.body_model_vposer import BodyModelWithPoser

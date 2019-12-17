@@ -34,6 +34,7 @@ from utils import JointMapper
 from cmd_parser import parse_config
 from data_parser import create_dataset
 from fit_single_frame import fit_single_frame
+from fit_3d_joints import *
 
 from camera import create_camera
 from prior import create_prior

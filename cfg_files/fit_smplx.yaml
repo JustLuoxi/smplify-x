@@ -99,12 +99,13 @@ face_joints_weights:
     - 0.0
     - 2.0
 
-use_vposer: True
+
 #vposer_ckpt: "vposer"
 
 # ----------------------------------------------------
-data_folder: "L:/data/exp/labeling/mit_crane/0/TEST_smplx/openpose"
-output_folder: "L:/data/exp/labeling/mit_crane/0/TEST_smplx/estimation"
+use_vposer: True
+data_folder: "L:/data/exp/labeling/mit_bouncing/45/TEST_smplx"
+output_folder: "L:/data/exp/labeling/mit_bouncing/45/TEST_smplx/estimation"
 visualize: False
 model_folder: "./"
 vposer_ckpt: "./vposer/vposer_v1_0"

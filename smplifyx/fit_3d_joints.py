@@ -46,7 +46,7 @@ import fitting
 from human_body_prior.tools.model_loader import load_vposer
 
 
-def fit_single_frame(img,
+def fit_3d_joints(img,
                      keypoints,
                      body_model,
                      camera,
