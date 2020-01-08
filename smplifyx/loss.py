@@ -2,7 +2,7 @@ import torch
 import time
 import numpy as np
 import torch.nn.functional as torch_f
-from alignment.utils import AnalyzeSkeleton
+from smplifyx.utils import AnalyzeSkeleton
 import math
 import torch.nn.functional as F
 
@@ -73,13 +73,18 @@ def PoseRegPCALoss_Level(pose_parameter,pc_param_norm, pc_param_std, w_norm = 1,
 
     return loss
 
-def JointPositionLoss(pred_verts, target_verts, handsize=1): #, skipjoints=[1,9,12,23,24,20,21]):
+def JointPositionLoss(pred_verts, target_verts, handsize=1, skipjoints=[]):
+    pred_verts_clone = pred_verts.clone()
+    target_verts_clone = target_verts.clone()
 
     standard = handsize
     loss_fn = torch.nn.MSELoss(reduction='sum')
-    # pred_verts[:,skipjoints,:] = 0
-    # target_verts[:,skipjoints,:] = 0
-    loss = loss_fn(pred_verts[:, 1:, :], target_verts[:, 1:, :])
+    pred_verts_clone[:,skipjoints,:] = 0
+    target_verts_clone[:,skipjoints,:] = 0
+    pred_verts_clone[target_verts_clone==0]=0
+    # pred_verts_clone[:,8,:] = 2*pred_verts_clone[:,8,:]
+    # target_verts_clone[:,8,:] = 2*target_verts_clone[:,8,:]
+    loss = loss_fn(pred_verts_clone, target_verts_clone)
     loss = loss / (standard + 1e-8)
     return loss
 
@@ -109,16 +114,20 @@ def JointPositionLoss_Just(pred_joints, verts, target_joints, handsize=1): #, sk
 def BoneLengthLoss(pred_verts, target_verts, isBody=False):
     assert (pred_verts.shape == target_verts.shape)
     batch_size = pred_verts.shape[0]
+    w = []
     if isBody:
         links = [
             (0,1,8),
             (2,3,4),
             (5,6,7),
+            (8,9),
+            (8,12),
             (10,11),
             (13,14),
             (2,1,5),
         ]
-        bone_num = 10
+        bone_num = 12
+        w = [2,1,1,1,1,1,1,1]
     else:
         links = torch.tensor([
             (0, 1, 2, 3, 4),
@@ -128,32 +137,45 @@ def BoneLengthLoss(pred_verts, target_verts, isBody=False):
             (0, 17, 18, 19, 20),
         ]).cuda()
         bone_num = 20
+        w = [1, 1, 1, 1, 1]
 
-    bone_ratios = torch.zeros((batch_size, bone_num)).cuda()
-    ones = torch.ones_like(bone_ratios).cuda()
+    bone_ratios = torch.zeros((batch_size, bone_num))
+    ones = torch.ones_like(bone_ratios)
     itr = 0
+    i = 0
+    zero = torch.zeros_like(target_verts[:, 0, :])
     for link in links:
         for j1, j2 in zip(link[0:-1], link[1:]):
+            if torch.equal(target_verts[:, j1, :], zero) or torch.equal(target_verts[:, j2, :], zero):
+                continue
+
             pred_bone_len = torch.norm(pred_verts[:, j1, :] - pred_verts[:, j2, :], dim=1)
             target_bone_len = torch.norm(target_verts[:, j1, :] - target_verts[:, j2, :], dim=1)
             ratio = pred_bone_len / target_bone_len
-            bone_ratios[:, itr] = ratio
+            bone_ratios[:, itr] = ratio * w[i]
             itr = itr+1
-    loss = torch_f.mse_loss(bone_ratios, ones, reduction='mean')
-    return loss * 50
+        i = i+1
+    loss = torch_f.mse_loss(bone_ratios, ones, reduction='sum')
+    return loss
 
-def JointAngleLoss(pred_verts, tar_angles, tar_bone_dirs):
-    pred_angles, pred_bone_dirs = AnalyzeSkeleton(pred_verts)
+def JointAngleLoss(pred_verts, tar_angles, tar_bone_dirs, isBody = True):
+    pred_angles, pred_bone_dirs = AnalyzeSkeleton(pred_verts, isBody=isBody)
 
     # angle: 0-2pi
-    loss_angle = torch_f.mse_loss(pred_angles, tar_angles, reduction='mean')
+    pred_angles_clone = pred_angles.clone()
+    tar_angles_clone = tar_angles.clone()
+    pred_angles_clone[tar_angles_clone==0]=0
+    #
+    # pred_angles_clone[:,0]=2*pred_angles_clone[:,0]
+    # tar_angles_clone[:, 0] = 2 * tar_angles_clone[:, 0]
+    loss_angle = torch_f.mse_loss(pred_angles_clone, tar_angles_clone, reduction='sum')
 
     # # angle:0-2pi
-    # pred_dir_angles = torch.acos((pred_bone_dirs * tar_bone_dirs).sum(dim=2))
-    # optim_dir_angles = torch.zeros_like(pred_dir_angles)
-    # loss_dir = torch_f.mse_loss(pred_dir_angles, optim_dir_angles, reduction='mean')
+    pred_dir_angles = torch.acos((pred_bone_dirs * tar_bone_dirs).sum(dim=2))
+    optim_dir_angles = torch.zeros_like(pred_dir_angles)
+    loss_dir = torch_f.mse_loss(pred_dir_angles, optim_dir_angles, reduction='sum')
 
-    loss = loss_angle*1000  #+ loss_dir
+    loss = loss_angle + loss_dir
 
     return loss
 

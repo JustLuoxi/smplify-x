@@ -16,18 +16,23 @@
 
 import os.path as osp
 import argparse
+from tqdm import tqdm
 
 import numpy as np
 import torch
 
 import smplx
-from utils import *
+
+from smplifyx.utils import *
+from smplifyx.loss import *
 
 def main(model_folder, model_type='smplx', ext='npz',
+         model = None,
          gender='neutral', plot_joints=False,
          plotting_module='pyrender',
-         use_face_contour=False):
-
+         use_face_contour=False,
+         openpose_folder = None,
+         output_path = "pose_fitting.ply"):
 
     # rest pose
     use_hands = False
@@ -39,14 +44,15 @@ def main(model_folder, model_type='smplx', ext='npz',
                             use_face_contour=use_face_contour,
                             openpose_format=openpose_format)
     joint_mapper = JointMapper(map)
-
-    model = smplx.create(model_folder, model_type=model_type,
-                         gender=gender, use_face_contour=use_face_contour,
-                         joint_mapper=joint_mapper,
-                         ext=ext)
+    if model ==None:
+        model = smplx.create(model_folder, model_type=model_type,
+                             gender=gender, use_face_contour=use_face_contour,
+                             joint_mapper=joint_mapper,
+                             flat_hand_mean = False,
+                             ext=ext)
     print(model)
 
-    betas = torch.zeros([1, 10], dtype=torch.float32)
+    betas = torch.zeros([1, 10], dtype=torch.float32, requires_grad=True)
     expression = torch.zeros([1, 10], dtype=torch.float32)
     output = model(betas=betas, expression=expression, joint_mapper = joint_mapper,
                    return_verts=True)
@@ -55,8 +61,10 @@ def main(model_folder, model_type='smplx', ext='npz',
 
     # globalRT
     # load target 3d skeleton
-    openpose_folder = 'L:\\data\\exp\\labeling\\mit_bouncing\\45\\openpose\\'
+    # openpose_folder = 'L:\\data\\exp\\labeling\\mit_bouncing\\45\\openpose\\'
+    # openpose_folder = 'L:\\data\\exp\\labeling\\mit_crane\\0\\openpose\\'
     target_skeleton, bodysize = LoadBodySkeleton(openpose_folder)
+    target_skeleton[joints==0]=0
     if len(target_skeleton.shape) == 3:
         if target_skeleton.shape[0] > args.batch_size:
             target_skeleton = target_skeleton[:1, :, :]
@@ -67,126 +75,125 @@ def main(model_folder, model_type='smplx', ext='npz',
 
     global_rot = ComputeGlobalR(target_skeleton, joints, isBody=True)
     global_rot = torch.tensor(global_rot, dtype=torch.float32, requires_grad=True)
-    global_transl = target_skeleton[:,8,:] - torch.from_numpy(joints[:,8,:])
-    global_transl = torch.tensor(global_transl, dtype=torch.float32, requires_grad=False)
+    global_transl = target_skeleton[:,8,:] -  torch.from_numpy(joints[:,8,:])
+    global_transl = torch.tensor(global_transl, dtype=torch.float32, requires_grad=True)
 
-    output = model(global_orient = global_rot, transl = global_transl,
-        betas=betas, expression=expression, joint_mapper=joint_mapper,
-                   return_verts=True)
-    vertices = output.vertices.detach().cpu().numpy().squeeze()
-    joints = output.joints.detach().cpu().numpy().squeeze()
+    optimizer_shape = torch.optim.LBFGS([betas])
+
+    # # shape
+    # pbar = tqdm(range(1))
+    # for idx in pbar:
+    #     def closure():
+    #         optimizer_shape.zero_grad()
+    #         output = model(global_orient = global_rot, transl = global_transl,
+    #         betas=betas, expression=expression, joint_mapper=joint_mapper,
+    #                    return_verts=True)
+    #         loss_shape = BoneLengthLoss(output.joints, target_skeleton, isBody=True)
+    #         loss_l2 = JointPositionLoss(output.joints, target_skeleton, bodysize,skipjoints=[0,2,3,4,6,7,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24])
+    #         loss_shape_reg = ShapeRegLoss(betas)
+    #         loss = loss_shape + 20*loss_l2 +0.05 * loss_shape_reg
+    #         pbar.set_description("Shape Loss: %.6f, lr: %.6f" % (torch.sum(loss), get_lr(optimizer_shape)))
+    #         loss.backward(retain_graph=True)
+    #         return loss
+    #     optimizer_shape.step(closure)
+    #
+    # ##    export
+    # output = model(global_orient=global_rot, transl=global_transl,
+    #                betas=betas,
+    #                expression=expression, joint_mapper=joint_mapper, return_verts=True)
+    # vertices = output.vertices.detach().cpu().numpy().squeeze()
+    # joints = output.joints.detach().cpu().numpy().squeeze()
+    # import trimesh
+    # np.savetxt('shape_fitting.txt',joints)
+    # out_mesh = trimesh.Trimesh(vertices, model.faces, process=False)
+    # out_mesh.export('shape_fitting.obj')
 
     # pose
+    # body_pose_cpu = ComputeInitPose(target_skeleton, output.joints.detach())
+    # body_pose_cpu = torch.tensor(body_pose_cpu, dtype=torch.float32, requires_grad=True)
 
+    # load pc:
+    pc_path = 'X:\\POSE_EG\\0111_ExperimentData\\T_samba\\OURS\\40\\mesh_000040.txt'
+    target_pt, target_normal = LoadTargetPC(pc_path)
+
+    body_pose_cpu =  torch.zeros([1, 63], dtype=torch.float32, requires_grad=True)
+    target_angle, target_bone_dirs = AnalyzeSkeleton(target_skeleton, isBody=True)
+    optimizer_body_pose = torch.optim.LBFGS([body_pose_cpu])
+    loss_r = 100
+    pbar = tqdm(range(1))
+    for idx in pbar:
+        def closure():
+            optimizer_body_pose.zero_grad()
+            optimizer_shape.zero_grad()
+            output = model(global_orient = global_rot, transl = global_transl,
+                        betas=betas, body_pose = body_pose_cpu,
+                           expression=expression, joint_mapper=joint_mapper, return_verts=True)
+            output.joints[target_skeleton==0]=0
+            loss_shape = BoneLengthLoss(output.joints, target_skeleton, isBody=True)
+            loss_l2 = JointPositionLoss(output.joints, target_skeleton, bodysize)
+            loss_angle = JointAngleLoss(output.joints, target_angle, target_bone_dirs,isBody=True)
+            loss_shape_reg = ShapeRegLoss(betas)
+            loss_dis = PtChamferLoss(output.vertices, target_pt)
+            # loss_reg = PoseRegLoss(body_pose_cpu)
+            loss = 4 * loss_l2 + 0.1 * loss_angle + loss_shape + 0.05 * loss_shape_reg + loss_dis*10
+            pbar.set_description("Pose Loss: %.6f, lr: %.6f" % (torch.sum(loss), get_lr(optimizer_body_pose)))
+            loss.backward(retain_graph=True)
+            loss_r = loss.clone().detach()
+            return loss
+        optimizer_body_pose.step(closure)
+        optimizer_shape.step(closure)
+
+    output = model(global_orient=global_rot, transl=global_transl,
+                   betas=betas, body_pose=body_pose_cpu,
+                   expression=expression, joint_mapper=joint_mapper, return_verts=True)
+    vertices = output.vertices.clone().detach().cpu().numpy().squeeze()
+    joints = output.joints.clone().detach().cpu().numpy().squeeze()
+    import trimesh
+    np.savetxt(output_path+'_joints.txt',joints)
+    out_mesh = trimesh.Trimesh(vertices, model.faces, process=False)
+    out_mesh.export(output_path)
+
+    optimizer_t = torch.optim.SGD([global_transl], lr = 0.005, momentum=0.9)
+    pbar = tqdm(range(1))
+    for idx in pbar:
+        def closure():
+            optimizer_body_pose.zero_grad()
+            optimizer_shape.zero_grad()
+            optimizer_t.zero_grad()
+            output = model(global_orient = global_rot, transl = global_transl,
+                        betas=betas, body_pose = body_pose_cpu,
+                           expression=expression, joint_mapper=joint_mapper, return_verts=True)
+            output.joints[target_skeleton==0]=0
+            loss_shape = BoneLengthLoss(output.joints, target_skeleton, isBody=True)
+            loss_l2 = JointPositionLoss(output.joints, target_skeleton, bodysize)
+            loss_angle = JointAngleLoss(output.joints, target_angle, target_bone_dirs,isBody=True)
+            loss_shape_reg = ShapeRegLoss(betas)
+            loss_dis = PtChamferLoss(output.vertices, target_pt)
+            # loss_reg = PoseRegLoss(body_pose_cpu)
+            loss = 4*loss_l2 + 0.1*loss_angle + loss_shape + 0.05 * loss_shape_reg+ loss_dis*10
+            pbar.set_description("Pose Loss: %.6f, lr: %.6f" % (torch.sum(loss), get_lr(optimizer_body_pose)))
+            loss.backward(retain_graph=True)
+            loss_r = loss.clone().detach()
+            return loss
+        optimizer_body_pose.step(closure)
+        optimizer_shape.step(closure)
+        optimizer_t.step(closure)
 
     ##    export
+    output = model(global_orient=global_rot, transl=global_transl,
+                   betas=betas, body_pose=body_pose_cpu,
+                   expression=expression, joint_mapper=joint_mapper, return_verts=True)
+    vertices = output.vertices.detach().cpu().numpy().squeeze()
+    joints = output.joints.detach().cpu().numpy().squeeze()
     import trimesh
-    np.savetxt('initial_joints.txt',joints)
+    np.savetxt(output_path+'_joints.txt',joints)
     out_mesh = trimesh.Trimesh(vertices, model.faces, process=False)
-    # rot = trimesh.transformations.rotation_matrix(
-    #     np.radians(180), [1, 0, 0])
-    # out_mesh.apply_transform(rot)
-    out_mesh.export('test.obj')
+    out_mesh.export(output_path)
+    return loss_r
 
-    print('Vertices shape =', vertices.shape)
-    print('Joints shape =', joints.shape)
-
-    # render
-    # if plotting_module == 'pyrender':
-    #     import pyrender
-    #     import trimesh
-    #     vertex_colors = np.ones([vertices.shape[0], 4]) * [0.3, 0.3, 0.3, 0.8]
-    #     tri_mesh = trimesh.Trimesh(vertices, model.faces,
-    #                                vertex_colors=vertex_colors)
-    #
-    #     mesh = pyrender.Mesh.from_trimesh(tri_mesh)
-    #
-    #     scene = pyrender.Scene()
-    #     scene.add(mesh)
-    #
-    #     if plot_joints:
-    #         sm = trimesh.creation.uv_sphere(radius=0.005)
-    #         sm.visual.vertex_colors = [0.9, 0.1, 0.1, 1.0]
-    #         tfs = np.tile(np.eye(4), (len(joints), 1, 1))
-    #         tfs[:, :3, 3] = joints
-    #         joints_pcl = pyrender.Mesh.from_trimesh(sm, poses=tfs)
-    #         scene.add(joints_pcl)
-    #
-    #     pyrender.Viewer(scene, use_raymond_lighting=True)
-    # elif plotting_module == 'matplotlib':
-    #     from matplotlib import pyplot as plt
-    #     from mpl_toolkits.mplot3d import Axes3D
-    #     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-    #
-    #     fig = plt.figure()
-    #     ax = fig.add_subplot(111, projection='3d')
-    #
-    #     mesh = Poly3DCollection(vertices[model.faces], alpha=0.1)
-    #     face_color = (1.0, 1.0, 0.9)
-    #     edge_color = (0, 0, 0)
-    #     mesh.set_edgecolor(edge_color)
-    #     mesh.set_facecolor(face_color)
-    #     ax.add_collection3d(mesh)
-    #     ax.scatter(joints[:, 0], joints[:, 1], joints[:, 2], color='r')
-    #
-    #     if plot_joints:
-    #         ax.scatter(joints[:, 0], joints[:, 1], joints[:, 2], alpha=0.1)
-    #     plt.show()
-    # elif plotting_module == 'open3d':
-    #     import open3d as o3d
-    #
-    #     mesh = o3d.TriangleMesh()
-    #     mesh.vertices = o3d.Vector3dVector(
-    #         vertices)
-    #     mesh.triangles = o3d.Vector3iVector(model.faces)
-    #     mesh.compute_vertex_normals()
-    #     mesh.paint_uniform_color([0.3, 0.3, 0.3])
-    #
-    #     o3d.visualization.draw_geometries([mesh])
-    # else:
-    #     raise ValueError('Unknown plotting_module: {}'.format(plotting_module))
-
-def Regressor(**args):
-
-
-    body_dofs = 63
-    shape_ncomps = 10
-    pose_ncomps = args.mano_ncomps*2 + body_dofs
-
-    # initialize parameters
-    pose_params_cpu = np.zeros([args.batch_size, pose_ncomps])
-    shape_params_cpu = np.zeros([args.batch_size, shape_ncomps])
-    shape_params_cpu[:] = 0.8
-    # global_rot = np.zeros([args.batch_size, 3])
-
-    if args.gender == 'male':
-        mano_ske_path = args.mano_root / 'SMPLH_male_SKE.txt'
-    elif args.gender == 'female':
-        mano_ske_path = args.mano_root / 'SMPLH_female_SKE.txt'
-    init_skeleton = torch.from_numpy(np.loadtxt(mano_ske_path)).type(torch.float32)
-    init_skeleton = init_skeleton.repeat((args.batch_size, 1, 1))
-    global_scale = ComputeGlobalS(target_skeleton, init_skeleton, isBody=True)
-    global_rot = ComputeGlobalR(target_skeleton, init_skeleton, isBody=True)
-    # bone_id = 1
-    # bone_id = bone_id - 1
-    # pose_params_cpu[:,bone_id*3:bone_id*3+3] = [1.71, 0, 0]
-    pose_params_cpu = ComputeInitPose(target_skeleton, init_skeleton)
-
-    if args.cuda:
-        pose_params = torch.tensor(pose_params_cpu, dtype=torch.float32, device='cuda', requires_grad=True)
-        shape_params = torch.tensor(shape_params_cpu, dtype=torch.float32, device='cuda', requires_grad=True)
-        global_scale = global_scale.cuda()
-        global_rot = torch.tensor(global_rot, dtype=torch.float32, device='cuda', requires_grad=True)
-        target_skeleton = target_skeleton.cuda()
-    else:
-        pose_params = torch.tensor(pose_params_cpu, dtype=torch.float32, requires_grad=True)
-        shape_params = torch.tensor(shape_params_cpu, dtype=torch.float32, requires_grad=True)
-        global_rot = torch.tensor(global_rot, dtype=torch.float32, requires_grad=True)
-
-    # second order optimization
-    optimizer_shape = torch.optim.LBFGS([shape_params])
-    optimizer_pose = torch.optim.LBFGS([pose_params])
-    # optimizer_globalr = torch.optim.LBFGS([global_rot])
+def get_lr(optimizer):
+    for param_group in optimizer.param_groups:
+        return param_group['lr']
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='SMPL-X Demo')
@@ -196,7 +203,7 @@ if __name__ == '__main__':
     parser.add_argument('--model-type', default='smplx', type=str,
                         choices=['smpl', 'smplh', 'smplx'],
                         help='The type of model to load')
-    parser.add_argument('--gender', type=str, default='neutral',
+    parser.add_argument('--gender', type=str, default='female',
                         help='The gender of the model')
     parser.add_argument('--plotting-module', type=str, default='pyrender',
                         dest='plotting_module',
@@ -210,6 +217,10 @@ if __name__ == '__main__':
     parser.add_argument('--use-face-contour', default=False,
                         type=lambda arg: arg.lower() in ['true', '1'],
                         help='Compute the contour of the face')
+    parser.add_argument('--openpose_folder',type=str,required=True,
+                        help='openpose_folder path')
+    parser.add_argument('--output_path', type=str, required=True,
+                        help='output model path ')
 
     args = parser.parse_args()
 
@@ -220,8 +231,76 @@ if __name__ == '__main__':
     gender = args.gender
     ext = args.ext
     plotting_module = args.plotting_module
+    openpose_folder = args.openpose_folder
+    output_path = args.output_path
 
     main(model_folder, model_type, ext=ext,
          gender=gender, plot_joints=plot_joints,
          plotting_module=plotting_module,
-         use_face_contour=use_face_contour)
+         use_face_contour=use_face_contour,
+         openpose_folder = openpose_folder,
+         output_path = output_path)
+
+#     run sequence
+    # load smplx
+    use_hands = False
+    use_face = False
+    use_face_contour = False
+    openpose_format = 'coco25'
+    map = smpl_to_openpose(model_type, use_hands=use_hands,
+                           use_face=use_face,
+                           use_face_contour=use_face_contour,
+                           openpose_format=openpose_format)
+    joint_mapper = JointMapper(map)
+    model = smplx.create(model_folder, model_type=model_type,
+                         gender=gender, use_face_contour=use_face_contour,
+                         joint_mapper=joint_mapper,
+                         ext=ext)
+
+    root_folder = [
+        # 'X:\\POSE_EG\\0111_ExperimentData\\D_bouncing\\OURS',
+        # 'X:\\POSE_EG\\0111_ExperimentData\\D_handstan\\OURS',
+        ## 'X:\\POSE_EG\\0111_ExperimentData\\D_marchaaa\\OURS',
+        ## 'X:\\POSE_EG\\0111_ExperimentData\\D_squataaa\\OURS',
+        # 'X:\\POSE_EG\\0111_ExperimentData\\I_crane\\OURS',
+        # 'X:\\POSE_EG\\0111_ExperimentData\\I_jumpi\\OURS',
+        ## 'X:\\POSE_EG\\0111_ExperimentData\\I_march\\OURS',
+        ## 'X:\\POSE_EG\\0111_ExperimentData\\I_squat\\OURS',
+        'X:\\POSE_EG\\0111_ExperimentData\\T_samba\\OURS',
+    ]
+
+    error_folder = []
+    import os
+
+    for root in root_folder:
+        save_folder = root + "\\smplx_fittedmodel_1227_female"
+        if not os.path.exists(save_folder):
+            os.mkdir(save_folder)
+
+        for i in range(0, 149, 3):
+            openpose_folder = root + '\\' + str(i) + "\\openpose"
+            skeleton_path = openpose_folder + "\\skeleton_body\\skeleton.txt"
+            if not os.path.exists(skeleton_path):
+                error_folder.append(skeleton_path)
+                continue
+            output_path = save_folder + '\\' + str(i).zfill(6) + ".ply"
+
+            if os.path.exists(output_path):
+                continue
+
+            loss_r = main(model_folder, model_type, ext=ext, model = model,
+                 gender=gender, plot_joints=plot_joints,
+                 plotting_module=plotting_module,
+                 use_face_contour=use_face_contour,
+                 openpose_folder = openpose_folder,
+                 output_path = output_path)
+
+            if loss_r>10:
+                error_folder.append("large loss: " + openpose_folder)
+
+    with open("error_folder.txt", "w") as f:
+        import time
+        f.write("------ %s\n ----------" % time.time())
+        for item in error_folder:
+            f.write("%s\n" % item)
+

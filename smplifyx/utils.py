@@ -25,6 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from pathlib import Path
 from transform.rotation import Rotation as R
 
 def to_tensor(tensor, dtype=torch.float32):
@@ -291,10 +292,126 @@ def normalizev(vec):
     else:
         return vec/torch.norm(vec)
 
+def LoadTargetPC(target_path):
+    if Path(target_path).exists():
+        pt_data = np.loadtxt(target_path)
+        pt_normal = np.zeros([1, 3])
+        if pt_data.shape[1] == 6:
+            pt_cloud = pt_data[:, 0:3]
+            pt_normal = pt_data[:,3:]
+        pt_cloud = torch.from_numpy(pt_cloud).type(torch.float32)
+        pt_normal = torch.from_numpy(pt_normal).type(torch.float32)
+
+    else:
+        pt_cloud = torch.zeros(1,3)
+        pt_normal = torch.zeros(1, 3)
+    return pt_cloud, pt_normal
+
 def LoadBodySkeleton(openpose_folder):
-    body_joints_path = openpose_folder + 'skeleton_body\\skeleton.txt'
+    body_joints_path = openpose_folder + '\\skeleton_body\\skeleton.txt'
     skeleton_body = np.loadtxt(body_joints_path)
     skeleton_all = skeleton_body.copy()
     skeleton_all = torch.from_numpy(skeleton_all).type(torch.float32)
     bodysize = torch.max(torch.cdist(skeleton_all, skeleton_all)) * 0.3
     return skeleton_all, bodysize
+
+def AnalyzeSkeleton(target_verts, isBody=True):
+    # target_verts: batch_size, 21, 3
+    batch_size = target_verts.shape[0]
+    links = torch.tensor([
+        (0, 1, 2, 3, 4),
+        (0, 5, 6, 7, 8),
+        (0, 9, 10, 11, 12),
+        (0, 13, 14, 15, 16),
+        (0, 17, 18, 19, 20),
+    ])
+    bone_num = 15
+    if isBody:
+        links = torch.tensor([
+            (0, 1, 8),
+            (1,8,10),
+            (1,8,13),
+            (8,10,11),
+            (8,13,14),
+            (2, 3, 4),
+            (5, 6, 7),
+            (10, 11,22),
+            (13, 14,19),
+            (2, 1, 5),
+            (1,0,16),
+            (0, 16,18),
+            (1,0,15),
+            (0,15,17),
+        ])
+        bone_num = 14
+    tar_angles = torch.zeros((batch_size, bone_num))
+    tar_bone_directions = torch.zeros((batch_size, bone_num,3)) # discard last bone
+    itr = 0
+    zero = torch.zeros_like(target_verts[:, 0, :])
+    for link in links:
+        for j1, j2, j3 in zip(link[0:-2], link[1:-1], link[2:]):
+            if torch.equal(target_verts[:, j1, :], zero) or torch.equal(target_verts[:, j2, :],zero):
+                tar_angles[:, itr] = 0
+                tar_bone_directions[:, itr, :] = 0
+                continue
+            tar_vec = target_verts[:, j1, :] - target_verts[:, j2, :]  # batch_size * 3
+            tar_vec_norm = tar_vec.pow(2).sum(dim=1).pow(0.5)  # batch_size * 1
+            tar_vec2 = target_verts[:, j3, :] - target_verts[:, j2, :]
+            tar_vec2_norm = tar_vec2.pow(2).sum(dim=1).pow(0.5)
+            tar_angle = (tar_vec * tar_vec2).sum(dim=1) / (tar_vec_norm * tar_vec2_norm)  # batch_size
+            tar_angles[:, itr] = torch.acos(tar_angle)
+            tar_bone_directions[:, itr, :] = -tar_vec
+            itr = itr + 1
+
+    return tar_angles, tar_bone_directions
+
+def ComputeInitPose(target_skeleton, init_skeleton, isBody = True):
+    target_skeleton = target_skeleton.squeeze(0)
+    init_skeleton = init_skeleton.squeeze(0)
+    # Input: target_skeleton is openpose style, body + left hand + right hand [65*3]
+    # Output: pose_param: axis angle for all bones [51*3]
+    # 21 for body
+    # 15 for each hand
+
+    # I need to know SMPL kinematic chain
+    bone_list = [
+        # from , to
+        [12,13],    #1 left thigh
+        [9,10],    #2 right thigh
+        [8,1],     #3 belly
+        [13,14],   #4 left lower leg
+        [10,11],   #5 right lower leg
+        [8,1],     #6 chest
+        [14,19],   #7 left foot
+        [11,22],   #8 right foot
+        [8,1],     #9 upper chest
+        [14,19],   #10 left toe
+        [11,22],   #11 right toe
+        [1,0],     #12 neck
+        [1,5],     #13 left shoulder
+        [1,2],     #14 right shoulder
+        [1,0],     #15 head
+        [5,6],     #16 left upper arm
+        [2,3],     #17 right upper arm
+        [6,7],     #18 left lower arm
+        [3,4],     #19 left upper arm
+        # [7,33],    #20 wrist - hand left index
+        # [4,53]     #21 wrist - hand right index
+    ]
+    body_pose_param = torch.zeros(21,3)
+    counter = 0
+
+    for bone in bone_list:
+        smpl_dir = normalizev(init_skeleton[bone[1]] - init_skeleton[bone[0]])
+        # smpl_dir = R.apply(rot, mano_indexfix)
+        target_dir = normalizev(target_skeleton[bone[1]] - target_skeleton[bone[0]])
+        axis = normalizev(np.cross(smpl_dir, target_dir))
+        angle = np.arccos(np.dot(smpl_dir, target_dir))
+        rot = R.from_rotvec(axis * angle)
+        body_pose_param[counter] = torch.from_numpy(rot.as_rotvec()).type(torch.float32)
+        # rot
+        counter = counter + 1
+        break
+    body_pose_param = body_pose_param.view(-1).unsqueeze(0)
+
+    return body_pose_param
