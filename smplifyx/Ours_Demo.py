@@ -113,8 +113,8 @@ def main(model_folder, model_type='smplx', ext='npz',
     # body_pose_cpu = torch.tensor(body_pose_cpu, dtype=torch.float32, requires_grad=True)
 
     # load pc:
-    pc_path = 'X:\\POSE_EG\\0111_ExperimentData\\T_samba\\OURS\\40\\mesh_000040.txt'
-    target_pt, target_normal = LoadTargetPC(pc_path)
+    # pc_path = 'X:\\POSE_EG\\0111_ExperimentData\\T_samba\\OURS\\40\\mesh_000040.txt'
+    # target_pt, target_normal = LoadTargetPC(pc_path)
 
     body_pose_cpu =  torch.zeros([1, 63], dtype=torch.float32, requires_grad=True)
     target_angle, target_bone_dirs = AnalyzeSkeleton(target_skeleton, isBody=True)
@@ -133,9 +133,9 @@ def main(model_folder, model_type='smplx', ext='npz',
             loss_l2 = JointPositionLoss(output.joints, target_skeleton, bodysize)
             loss_angle = JointAngleLoss(output.joints, target_angle, target_bone_dirs,isBody=True)
             loss_shape_reg = ShapeRegLoss(betas)
-            loss_dis = PtChamferLoss(output.vertices, target_pt)
+            # loss_dis = PtChamferLoss(output.vertices, target_pt)
             # loss_reg = PoseRegLoss(body_pose_cpu)
-            loss = 4 * loss_l2 + 0.1 * loss_angle + loss_shape + 0.05 * loss_shape_reg + loss_dis*10
+            loss = 4 * loss_l2 + 0.1 * loss_angle + loss_shape + 0.05 * loss_shape_reg  # + loss_dis*10
             pbar.set_description("Pose Loss: %.6f, lr: %.6f" % (torch.sum(loss), get_lr(optimizer_body_pose)))
             loss.backward(retain_graph=True)
             loss_r = loss.clone().detach()
@@ -143,15 +143,15 @@ def main(model_folder, model_type='smplx', ext='npz',
         optimizer_body_pose.step(closure)
         optimizer_shape.step(closure)
 
-    output = model(global_orient=global_rot, transl=global_transl,
-                   betas=betas, body_pose=body_pose_cpu,
-                   expression=expression, joint_mapper=joint_mapper, return_verts=True)
-    vertices = output.vertices.clone().detach().cpu().numpy().squeeze()
-    joints = output.joints.clone().detach().cpu().numpy().squeeze()
-    import trimesh
-    np.savetxt(output_path+'_joints.txt',joints)
-    out_mesh = trimesh.Trimesh(vertices, model.faces, process=False)
-    out_mesh.export(output_path)
+    # output = model(global_orient=global_rot, transl=global_transl,
+    #                betas=betas, body_pose=body_pose_cpu,
+    #                expression=expression, joint_mapper=joint_mapper, return_verts=True)
+    # vertices = output.vertices.clone().detach().cpu().numpy().squeeze()
+    # joints = output.joints.clone().detach().cpu().numpy().squeeze()
+    # import trimesh
+    # np.savetxt(output_path+'_joints.txt',joints)
+    # out_mesh = trimesh.Trimesh(vertices, model.faces, process=False)
+    # out_mesh.export(output_path)
 
     optimizer_t = torch.optim.SGD([global_transl], lr = 0.005, momentum=0.9)
     pbar = tqdm(range(1))
@@ -168,9 +168,9 @@ def main(model_folder, model_type='smplx', ext='npz',
             loss_l2 = JointPositionLoss(output.joints, target_skeleton, bodysize)
             loss_angle = JointAngleLoss(output.joints, target_angle, target_bone_dirs,isBody=True)
             loss_shape_reg = ShapeRegLoss(betas)
-            loss_dis = PtChamferLoss(output.vertices, target_pt)
+            # loss_dis = PtChamferLoss(output.vertices, target_pt)
             # loss_reg = PoseRegLoss(body_pose_cpu)
-            loss = 4*loss_l2 + 0.1*loss_angle + loss_shape + 0.05 * loss_shape_reg+ loss_dis*10
+            loss = 4*loss_l2 + 0.1*loss_angle + loss_shape + 0.05 * loss_shape_reg #+ loss_dis*10
             pbar.set_description("Pose Loss: %.6f, lr: %.6f" % (torch.sum(loss), get_lr(optimizer_body_pose)))
             loss.backward(retain_graph=True)
             loss_r = loss.clone().detach()
@@ -203,7 +203,7 @@ if __name__ == '__main__':
     parser.add_argument('--model-type', default='smplx', type=str,
                         choices=['smpl', 'smplh', 'smplx'],
                         help='The type of model to load')
-    parser.add_argument('--gender', type=str, default='female',
+    parser.add_argument('--gender', type=str, default='male',
                         help='The gender of the model')
     parser.add_argument('--plotting-module', type=str, default='pyrender',
                         dest='plotting_module',
@@ -234,16 +234,16 @@ if __name__ == '__main__':
     openpose_folder = args.openpose_folder
     output_path = args.output_path
 
-    main(model_folder, model_type, ext=ext,
-         gender=gender, plot_joints=plot_joints,
-         plotting_module=plotting_module,
-         use_face_contour=use_face_contour,
-         openpose_folder = openpose_folder,
-         output_path = output_path)
+    # main(model_folder, model_type, ext=ext,
+    #      gender=gender, plot_joints=plot_joints,
+    #      plotting_module=plotting_module,
+    #      use_face_contour=use_face_contour,
+    #      openpose_folder = openpose_folder,
+    #      output_path = output_path)
 
 #     run sequence
     # load smplx
-    use_hands = False
+    use_hands = True
     use_face = False
     use_face_contour = False
     openpose_format = 'coco25'
@@ -266,18 +266,24 @@ if __name__ == '__main__':
         # 'X:\\POSE_EG\\0111_ExperimentData\\I_jumpi\\OURS',
         ## 'X:\\POSE_EG\\0111_ExperimentData\\I_march\\OURS',
         ## 'X:\\POSE_EG\\0111_ExperimentData\\I_squat\\OURS',
-        'X:\\POSE_EG\\0111_ExperimentData\\T_samba\\OURS',
+        # 'X:\\POSE_EG\\0111_ExperimentData\\T_samba\\OURS',
+        # 'X:\\Just\\OneDrive\\multiviewexp',
+        'D:\\POSE\\ICCV\\0_ICCV_EXP\\1-Badminton\\'
     ]
 
     error_folder = []
     import os
 
     for root in root_folder:
-        save_folder = root + "\\smplx_fittedmodel_1227_female"
-        if not os.path.exists(save_folder):
-            os.mkdir(save_folder)
+        # save_folder = root + "\\smplx_fittedmodel_0331"
+        # if not os.path.exists(save_folder):
+        #     os.mkdir(save_folder)
 
-        for i in range(0, 149, 3):
+        for i in range(62, 63, 2):
+            save_folder = root + '\\' + str(i) + "\\smplx_fittedmodel_0331"
+            if not os.path.exists(save_folder):
+                os.mkdir(save_folder)
+
             openpose_folder = root + '\\' + str(i) + "\\openpose"
             skeleton_path = openpose_folder + "\\skeleton_body\\skeleton.txt"
             if not os.path.exists(skeleton_path):
@@ -295,12 +301,12 @@ if __name__ == '__main__':
                  openpose_folder = openpose_folder,
                  output_path = output_path)
 
-            if loss_r>10:
+            if loss_r>20:
                 error_folder.append("large loss: " + openpose_folder)
 
     with open("error_folder.txt", "w") as f:
         import time
         f.write("------ %s\n ----------" % time.time())
         for item in error_folder:
-            f.write("%s\n" % item)
+            f.write("%s \n" % item )
 

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData">
+    <serverData>
+      <paths name="root@10.15.89.66:20001">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$/smplx-tools" web="/" />
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@10.15.89.66:20001 (2)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$/smplx-tools" web="/" />
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@10.15.89.66:20001 (3)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$/smplx-tools" web="/" />
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@10.15.89.66:20001 (5)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$/smplx-tools" web="/" />
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+  </component>
+</project>
